@@ -9,12 +9,12 @@ volatile sig_atomic_t daemonize = 1;
 
 struct config{
     char host[256];
-    char topic[256];
     int port;
 };
 
 struct topic {
     char name[256];
+    int qos;
 };
 
 struct topicList {
@@ -24,9 +24,11 @@ struct topicList {
 
 struct topicList *head = NULL;
 
-int getConfigProperty(char *path, char *string);
+int getConfigs(struct config *conf);
 
-int getConfig(struct config *conf);
+void insertFirst(struct topic data);
+
+int getConfigProperty(struct uci_context *ctx, struct uci_section *s,struct config *conf);
 
 void messageCallback (struct mosquitto *mosq, void *obj, const struct mosquitto_message *message);
 
@@ -37,43 +39,57 @@ int connectMosq(struct config *conf);
 int main(void)
 {
     int rc =0;
-    struct config conf = {0};  
-    getConfig(&conf);
-    connectMosq(&conf);   
+    struct config conf = {0};
+    getConfigs(&conf);
+    connectMosq(&conf); 
     return rc;
 }
 
-int getConfigProperty(char *path, char *string)
+int getConfigs(struct config *conf)
 {
     int rc = 0;
     struct uci_context *c;
+    struct uci_package *pkg = NULL;
+    struct uci_element *e;
+    struct uci_element *i;
     struct uci_ptr ptr;
 
     c = uci_alloc_context ();
-    if (uci_lookup_ptr (c, &ptr, path, false) != UCI_OK)
+    if (uci_load(c,"msqt", &pkg) != UCI_OK)
     {
         uci_perror (c, "get_config_entry Error");
         rc = -1;
         return rc;
     }
-    strcpy(string, ptr.o->v.string);
+    uci_foreach_element(&pkg->sections,e){
+        struct uci_section *section = uci_to_section(e);
+        getConfigProperty(c,section,conf);
+    }
     uci_free_context(c);
     return rc;
 }
 
-int getConfig(struct config *conf)
+int getConfigProperty(struct uci_context *ctx, struct uci_section *s, struct config *conf)
 {
     int rc = 0;
-    char port[256];
-    char hostPath[] = "msqt.msqt_sct.host";
-    char topicPath[] = "msqt.msqt_sct.topic";
-    char portPath[] = "msqt.msqt_sct.port";
-
-    getConfigProperty(hostPath, conf->host);
-    getConfigProperty(topicPath, conf->topic);
-    getConfigProperty(portPath, port);
-
-    conf->port = atoi(port);
+    
+    if(strcmp(s->type, "topic") == 0){
+        const char *name = uci_lookup_option_string(ctx,s,"name");
+        const char *qos = uci_lookup_option_string(ctx,s,"qos");
+        struct topic t = {0};
+        strcpy(t.name,name);
+        if(qos != NULL){
+            t.qos = atoi(qos);  
+        } else{
+            t.qos =0;
+        }
+        insertFirst(t);
+    } else if(strcmp(s->type, "settings") == 0){
+        const char *host = uci_lookup_option_string(ctx,s,"host");
+        const char *port = uci_lookup_option_string(ctx,s,"port");
+        conf->port = atoi(port);
+        strcpy(conf->host,host);
+    }
 
     return rc; 
 }
@@ -84,9 +100,7 @@ void messageCallback(struct mosquitto *mosq, void *obj, const struct mosquitto_m
 
 void connectCallback(struct mosquitto *mosq, void *data, int res)
 {
-    if(res != 0){
-        fprintf(stderr, "Couldn't connect, rc=%d\n", res);
-    } else fprintf(stdout, "Successfully connected\n");
+    fprintf(stdout, "Successfully connected\n");
     
 }
 
@@ -100,23 +114,11 @@ void insertFirst(struct topic data) {
    head = link;
 }
 
-void printList() {
-   struct topicList *ptr = head;
-	
-   while(ptr != NULL) {
-      printf(" ->%s",ptr->t.name);
-      ptr = ptr->next;
-   }
-}
-
 int connectMosq(struct config *conf)
 {
     struct mosquitto *mosq;
     int rc = 0;
-    struct topic t = {.name = "/tmp"};
-    struct topic tt = {.name = "/tmp1"};
-    insertFirst(t);
-    insertFirst(tt);
+    int counter = 0;
     struct topicList *etalol = head;
 
     mosquitto_lib_init();
@@ -130,19 +132,29 @@ int connectMosq(struct config *conf)
     mosquitto_message_callback_set(mosq, messageCallback);
 
     rc = mosquitto_connect(mosq, conf->host, conf->port, 60);
+    if(rc != MOSQ_ERR_SUCCESS){
+        goto cleanup;
+    }
     while(etalol != NULL){
-        mosquitto_subscribe(mosq, NULL, etalol->t.name, 0);
+        rc = mosquitto_subscribe(mosq, NULL, etalol->t.name, etalol->t.qos);
+        if(rc != MOSQ_ERR_SUCCESS){
+            fprintf(stdout, "Couldn't subscribe to %s", etalol->t.name);
+        }
         etalol = etalol->next;
     }
     while(daemonize){
         rc = mosquitto_loop(mosq, -1, 1);
-        if(rc){
+        if(rc && counter != 10){
             printf("Connection error!\n");
             sleep(10);
-            mosquitto_reconnect(mosq);
-        } 
+            rc = mosquitto_reconnect(mosq);
+            counter++;
+        } else if(counter > 10){
+            goto cleanup;
+        }
     }
-    mosquitto_destroy(mosq);
-    mosquitto_lib_cleanup(); 
+    cleanup:
+        mosquitto_destroy(mosq);
+        mosquitto_lib_cleanup(); 
     return rc;
 }
