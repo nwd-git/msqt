@@ -33,11 +33,15 @@ int createQuery(struct topic *topic, char *payload);
 
 int main(void)
 {
-    int rc =0;
+    int rc =0;  
+
     rc = check_database("/tmp/data.db", sql);
-    sqlite3_open("/tmp/data.db", &sql);
     if(rc != 0){
         return rc;
+    }
+    rc = sqlite3_open("/tmp/data.db", &sql);
+    if(rc != SQLITE_OK){
+        fprintf(stderr, "Couldn't open database");
     }
     rc = loadConfigurations(&conf);
     if(rc != 0){
@@ -100,6 +104,7 @@ int connectMosq(struct config *conf)
 
     rc = mosquitto_connect(mosq, conf->host, conf->port, 60);
     if(rc != MOSQ_ERR_SUCCESS){
+        fprintf(stderr, "Couldn't connect to Mosquitto");
         goto cleanup;
     }
     while(current != NULL){
