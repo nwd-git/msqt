@@ -2,33 +2,26 @@
 #include <stdlib.h>
 #include <mosquitto.h>
 #include <signal.h>
-#include <uci.h>
 #include <string.h>
+#include <sqlite3.h>
+#include "db_utils.h"
+#include "config_utils.h"
 
 volatile sig_atomic_t daemonize = 1;
 
-struct config{
-    char host[256];
-    int port;
-};
+struct sqlite3 *sql = NULL;
+
+struct config conf;
 
 struct topic {
     char name[256];
     int qos;
+    struct topic *next;
 };
 
-struct topicList {
-    struct topic t;
-    struct topicList *next;
-};
+struct topic *head = NULL;
 
-struct topicList *head = NULL;
-
-int getConfigs(struct config *conf);
-
-void insertFirst(struct topic data);
-
-int getConfigProperty(struct uci_context *ctx, struct uci_section *s,struct config *conf);
+void insert(char *name, int qos);
 
 void messageCallback (struct mosquitto *mosq, void *obj, const struct mosquitto_message *message);
 
@@ -36,82 +29,56 @@ void connectCallback (struct mosquitto *mosq, void *data, int res);
 
 int connectMosq(struct config *conf);
 
+int createQuery(struct topic *topic, char *payload);
+
 int main(void)
 {
     int rc =0;
-    struct config conf = {0};
-    getConfigs(&conf);
-    connectMosq(&conf); 
-    return rc;
-}
-
-int getConfigs(struct config *conf)
-{
-    int rc = 0;
-    struct uci_context *c;
-    struct uci_package *pkg = NULL;
-    struct uci_element *e;
-    struct uci_element *i;
-    struct uci_ptr ptr;
-
-    c = uci_alloc_context ();
-    if (uci_load(c,"msqt", &pkg) != UCI_OK)
-    {
-        uci_perror (c, "get_config_entry Error");
-        rc = -1;
+    rc = check_database("/tmp/data.db", sql);
+    sqlite3_open("/tmp/data.db", &sql);
+    if(rc != 0){
         return rc;
     }
-    uci_foreach_element(&pkg->sections,e){
-        struct uci_section *section = uci_to_section(e);
-        getConfigProperty(c,section,conf);
+    rc = loadConfigurations(&conf);
+    if(rc != 0){
+        fprintf(stderr, "Couldn't load configuration");
+        return rc;
     }
-    uci_free_context(c);
+    rc = connectMosq(&conf);
+    if(rc != 0){
+        fprintf(stderr,"Something went wrong");
+        return rc;
+    }
+    sqlite3_close(sql);
     return rc;
-}
-
-int getConfigProperty(struct uci_context *ctx, struct uci_section *s, struct config *conf)
-{
-    int rc = 0;
-    
-    if(strcmp(s->type, "topic") == 0){
-        const char *name = uci_lookup_option_string(ctx,s,"name");
-        const char *qos = uci_lookup_option_string(ctx,s,"qos");
-        struct topic t = {0};
-        strcpy(t.name,name);
-        if(qos != NULL){
-            t.qos = atoi(qos);  
-        } else{
-            t.qos =0;
-        }
-        insertFirst(t);
-    } else if(strcmp(s->type, "settings") == 0){
-        const char *host = uci_lookup_option_string(ctx,s,"host");
-        const char *port = uci_lookup_option_string(ctx,s,"port");
-        conf->port = atoi(port);
-        strcpy(conf->host,host);
-    }
-
-    return rc; 
 }
 
 void messageCallback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message) {
-    fprintf(stdout, "Got message \"%s\" from %s \n",(char *) message->payload,message->topic);
+    fprintf(stdout, "Got message from %s \n",message->topic);
+    createQuery(message->topic,(char *) message->payload);
 }
 
 void connectCallback(struct mosquitto *mosq, void *data, int res)
 {
-    fprintf(stdout, "Successfully connected\n");
-    
+    fprintf(stdout, "Successfully connected\n");  
 }
 
-void insertFirst(struct topic data) {
-   struct topicList *link = (struct topicList*) malloc(sizeof(struct topicList));
+void insert(char *name, int qos)
+{
+    struct topic *link = (struct topic*) malloc(sizeof(struct topic));
 	
-   link->t = data;
-	
-   link->next = head;
+    strncpy(link->name, name, strlen(name) + 1 );
+    link->qos = qos;
+    link->next = head;
+    head = link;
+}
 
-   head = link;
+int createQuery(struct topic *topic, char *payload)
+{
+    int rc = 0;
+    char *query = sqlite3_mprintf("insert into Messages(Topic, Message) values ('%q', '%q');", topic->name, payload);
+    sqlite3_exec(sql,query,NULL, 0, NULL);
+    return rc;
 }
 
 int connectMosq(struct config *conf)
@@ -119,7 +86,7 @@ int connectMosq(struct config *conf)
     struct mosquitto *mosq;
     int rc = 0;
     int counter = 0;
-    struct topicList *etalol = head;
+    struct topic *current = head;
 
     mosquitto_lib_init();
     mosq = mosquitto_new(NULL, true, NULL);
@@ -135,12 +102,12 @@ int connectMosq(struct config *conf)
     if(rc != MOSQ_ERR_SUCCESS){
         goto cleanup;
     }
-    while(etalol != NULL){
-        rc = mosquitto_subscribe(mosq, NULL, etalol->t.name, etalol->t.qos);
+    while(current != NULL){
+        rc = mosquitto_subscribe(mosq, NULL, current->name, current->qos);
         if(rc != MOSQ_ERR_SUCCESS){
-            fprintf(stdout, "Couldn't subscribe to %s", etalol->t.name);
+            fprintf(stderr, "Couldn't subscribe to %s", current->name);
         }
-        etalol = etalol->next;
+        current = current->next;
     }
     while(daemonize){
         rc = mosquitto_loop(mosq, -1, 1);

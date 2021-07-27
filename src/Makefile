@@ -1,10 +1,18 @@
-BIN:=msqt
-.PHONY:all clean
+CC = gcc
+CFLAGS = -g -Wall
+LDFLAGS = -lmosquitto -lsqlite3 -luci 
 
-all: $(BIN)
+TARGET = msqt
+DEPS = $(wildcard *.h)
+SRCS = $(wildcard *.c)
+OBJS = $(SRCS:.c=.o)
 
-$(BIN): main.c
-	$(CC) -o $@ $^ -luci -lmosquitto
+.PHONY: clean
 
-clean: 
-	rm -r $(BIN)
+all: $(TARGET)
+
+$(TARGET) : $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+clean:
+	$(RM) $(OBJS) -f $(TARGET)

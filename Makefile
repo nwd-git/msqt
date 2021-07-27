@@ -7,7 +7,7 @@ PKG_VERSION:=1.0.0
 include $(INCLUDE_DIR)/package.mk
 
 define Package/msqt
-	DEPENDS:=+libuci +libmosquitto
+	DEPENDS:=+libuci +libmosquitto +libsqlite3
 	CATEGORY:=Base system
 	TITLE:=msqt
 endef
