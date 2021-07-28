@@ -4,6 +4,8 @@
 #include <sys/stat.h>
 #include <sqlite3.h>
 
+struct sqlite3 *sql = NULL;
+
 static int create_database(char *path)
 {
     int rc = 0;

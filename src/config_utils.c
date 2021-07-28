@@ -3,6 +3,7 @@
 #include <uci.h>
 #include <string.h>
 #include "config_utils.h"
+#include "mosq.h"
 
 static int loadConfigProperty(struct uci_context *ctx, struct uci_section *s, struct config *conf)
 {
