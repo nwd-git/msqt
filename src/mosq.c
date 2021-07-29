@@ -12,7 +12,11 @@ int insertIntoDatabase(char *topic, char *payload)
 {
     int rc = 0;
     char *query = sqlite3_mprintf("insert into Messages(Topic, Message) values ('%q', '%q');", topic, payload);
-    sqlite3_exec(sql,query,NULL, 0, NULL);
+    rc = sqlite3_exec(sql,query,NULL, 0, NULL);
+    if(rc != SQLITE_OK){
+        fprintf(stderr, "Couldn't insert to database");
+        return rc;
+    }
     sqlite3_free(query);
     return rc;
 }
